@@ -1,8 +1,5 @@
 """Unitree H2 velocity environment configurations."""
 
-from dataclasses import replace
-import math
-
 from src.assets.robots import (
   H2_ACTION_SCALE,
   get_h2_robot_cfg,
@@ -12,27 +9,19 @@ from mjlab.envs import mdp as envs_mdp
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
-from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
 from src.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
-# Match Custom-R1-Rough stair curriculum (easy → ~residential riser).
-_H2_STAIR_STEP_HEIGHT_RANGE = (0.0, 0.18)  # meters
-_H2_MAX_INIT_TERRAIN_LEVEL = 0
-
 
 def unitree_h2_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Create Unitree H2 rough terrain velocity configuration.
-
-  Terrains: stairs + uneven only (no slopes / flat). Uses L2 ``stand_still``.
-  """
+  """Create Unitree H2 rough terrain velocity configuration."""
   cfg = make_velocity_env_cfg()
 
   cfg.sim.mujoco.ccd_iterations = 500
   cfg.sim.contact_sensor_maxmatch = 500
-  cfg.sim.nconmax = 128 if play else 48
+  cfg.sim.nconmax = 48
 
   cfg.scene.entities = {"robot": get_h2_robot_cfg()}
 
@@ -41,9 +30,6 @@ def unitree_h2_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     if sensor.name == "terrain_scan":
       assert isinstance(sensor, RayCastSensorCfg)
       sensor.frame.name = "pelvis"
-      # Terrain primitives/hfields are geom group 0.
-      sensor.include_geom_groups = (0,)
-      sensor.exclude_parent_body = True
 
   site_names = ("left_foot", "right_foot")
   geom_names = tuple(
@@ -78,40 +64,10 @@ def unitree_h2_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   )
 
   if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
-    gen = cfg.scene.terrain.terrain_generator
-    sub = dict(gen.sub_terrains)
-    if "pyramid_stairs" in sub:
-      sub["pyramid_stairs"] = replace(
-        sub["pyramid_stairs"],
-        step_height_range=_H2_STAIR_STEP_HEIGHT_RANGE,
-        step_width=0.35,
-      )
-    if "pyramid_stairs_inv" in sub:
-      sub["pyramid_stairs_inv"] = replace(
-        sub["pyramid_stairs_inv"],
-        step_height_range=_H2_STAIR_STEP_HEIGHT_RANGE,
-        step_width=0.35,
-      )
-    # Stairs + uneven only (no slopes / flat).
-    for drop in ("flat", "hf_pyramid_slope", "hf_pyramid_slope_inv"):
-      sub.pop(drop, None)
-    for name, prop in (
-      ("pyramid_stairs", 0.30),
-      ("pyramid_stairs_inv", 0.30),
-      ("random_rough", 0.20),
-      ("wave_terrain", 0.20),
-    ):
-      if name in sub:
-        sub[name] = replace(sub[name], proportion=prop)
-    cfg.scene.terrain.terrain_generator = replace(
-      gen, curriculum=True, sub_terrains=sub
-    )
-    cfg.scene.terrain.max_init_terrain_level = _H2_MAX_INIT_TERRAIN_LEVEL
-    assert "terrain_levels" in cfg.curriculum
+    cfg.scene.terrain.terrain_generator.curriculum = True
 
   joint_pos_action = cfg.actions["joint_pos"]
   assert isinstance(joint_pos_action, JointPositionActionCfg)
-  joint_pos_action.scale = H2_ACTION_SCALE
 
   cfg.viewer.body_name = "torso_link"
 
@@ -183,24 +139,6 @@ def unitree_h2_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     weight=-1.0,
     params={"sensor_name": self_collision_cfg.name, "force_threshold": 10.0},
   )
-  # L2 stand_still (sum of squared joint errors when cmd ≈ 0), weight -1.0.
-  # Func is src.tasks.velocity.mdp.rewards.stand_still (via make_velocity_env_cfg).
-  cfg.rewards["stand_still"] = RewardTermCfg(
-    func=cfg.rewards["stand_still"].func,
-    weight=-1.0,
-    params={
-      "command_name": "twist",
-      "command_threshold": 0.1,
-      "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
-    },
-  )
-
-  # Stair-friendly tracking (same priority pattern as Custom-R1-Rough).
-  cfg.rewards["foot_clearance"].weight = 0.0
-  cfg.rewards["track_linear_velocity"].weight = 3.0
-  cfg.rewards["track_linear_velocity"].params["std"] = math.sqrt(0.5)
-  cfg.rewards["track_angular_velocity"].weight = 3.0
-  cfg.rewards["track_angular_velocity"].params["std"] = math.sqrt(0.25)
 
   # Apply play mode overrides.
   if play:
