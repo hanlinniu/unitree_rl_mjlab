@@ -350,3 +350,54 @@ def custom_r1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
 
   return cfg
+
+
+def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Plane / no-scandot Flat env with RMA priv_latent domain randomization."""
+  # Import locally to avoid circular imports through src.tasks.velocity.mdp.
+  from src.tasks.velocity.rma import events as rma_events
+
+  cfg = custom_r1_flat_env_cfg(play=play)
+
+  # Replace separate friction/COM startup terms with the unified RMA randomizer
+  # so priv_latent matches the applied dynamics.
+  cfg.events.pop("foot_friction", None)
+  cfg.events.pop("base_com", None)
+
+  foot_geom_names = tuple(
+    f"{side}_foot{i}_collision" for side in ("left", "right") for i in range(1, 8)
+  )
+  cfg.events["init_rma_buffers"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.init_rma_buffers,
+    params={
+      "history_len": 10,
+      "num_priv_explicit": 9,
+    },
+  )
+  cfg.events["randomize_rma_priv_latent"] = EventTermCfg(
+    mode="reset",
+    func=rma_events.randomize_rma_priv_latent,
+    params={
+      "friction_range": (0.3, 1.6),
+      "mass_scale_range": (0.8, 1.2),
+      "com_offset_range": (-0.05, 0.05),
+      "motor_strength_range": (0.8, 1.2),
+      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
+      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
+    },
+  )
+  # Also run once at startup so the first observation is valid before reset.
+  cfg.events["randomize_rma_priv_latent_startup"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.randomize_rma_priv_latent,
+    params={
+      "friction_range": (0.3, 1.6),
+      "mass_scale_range": (0.8, 1.2),
+      "com_offset_range": (-0.05, 0.05),
+      "motor_strength_range": (0.8, 1.2),
+      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
+      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
+    },
+  )
+  return cfg
