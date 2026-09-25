@@ -13,6 +13,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
+from src.tasks.velocity import mdp as local_mdp
 from src.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
 
@@ -189,9 +190,28 @@ def unitree_h2_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Disable terrain curriculum (not present in play mode since rough clears all).
   cfg.curriculum.pop("terrain_levels", None)
 
-  if play:
-    twist_cmd = cfg.commands["twist"]
-    assert isinstance(twist_cmd, UniformVelocityCommandCfg)
+  # More zero-command standing so stand_still L2 is practiced (fixes forward creep).
+  twist_cmd = cfg.commands["twist"]
+  assert isinstance(twist_cmd, UniformVelocityCommandCfg)
+  if not play:
+    twist_cmd.rel_standing_envs = 0.10
+
+  # Explicit L2 stand_still (world_model gym uses L1@-0.5; mjlab L2@-1.0).
+  cfg.rewards["stand_still"] = RewardTermCfg(
+    func=local_mdp.stand_still,
+    weight=-1.0,
+    params={
+      "command_name": "twist",
+      "command_threshold": 0.1,
+      "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+    },
+  )
+
+  if not play:
+    # Gym-matched obs noise (ang_vel±0.2, gravity±0.05, dof_pos±0.01, dof_vel±1.5).
+    cfg.observations["actor"].enable_corruption = True
+  else:
+    cfg.observations["actor"].enable_corruption = False
     twist_cmd.ranges.lin_vel_x = (-0.5, 1.0)
     twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)

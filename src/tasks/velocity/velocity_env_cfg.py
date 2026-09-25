@@ -56,6 +56,10 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
   ##
 
   actor_terms = {
+    # Obs noise matches unitree_legged_gym world_model branch
+    # (20260606_world_model_legged_gym): noise_level=1.0 with
+    # ang_vel=0.2, gravity=0.05, dof_pos=0.01, dof_vel=1.5
+    # (applied as ±scale on the raw observation terms here).
     "base_ang_vel": ObservationTermCfg(
       func=mdp.builtin_sensor,
       params={"sensor_name": "robot/imu_ang_vel"},
@@ -343,6 +347,8 @@ def make_velocity_env_cfg() -> ManagerBasedRlEnvCfg:
       },
     ),
     "stand_still": RewardTermCfg(
+      # L2 joint error vs default pose when twist cmd ≈ 0 (weight -1.0).
+      # Gym world_model uses L1 at -0.5; L2@-1.0 is the stable mjlab choice for 29-DoF.
       func=mdp.stand_still,
       weight=-1.0,
       params={

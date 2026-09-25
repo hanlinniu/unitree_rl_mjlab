@@ -342,9 +342,40 @@ def custom_r1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   del cfg.observations["critic"].terms["height_scan"]
   cfg.curriculum.pop("terrain_levels", None)
 
-  if play:
-    twist_cmd = cfg.commands["twist"]
-    assert isinstance(twist_cmd, UniformVelocityCommandCfg)
+  # Flat: practice zero-command standing more (Rough keeps 0.02 for stairs).
+  # Also allow slight reverse so the policy is not forward-biased when cmd=0.
+  twist_cmd = cfg.commands["twist"]
+  assert isinstance(twist_cmd, UniformVelocityCommandCfg)
+  twist_cmd.rel_standing_envs = 0.10
+  twist_cmd.ranges.lin_vel_x = (-0.5, 1.5)
+  twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
+  twist_cmd.ranges.ang_vel_z = (-0.8, 0.8)
+  if "command_vel" in cfg.curriculum:
+    cfg.curriculum["command_vel"].params["velocity_stages"] = [
+      {
+        "step": 0,
+        "lin_vel_x": (-0.5, 1.5),
+        "lin_vel_y": (-0.5, 0.5),
+        "ang_vel_z": (-0.8, 0.8),
+      },
+    ]
+
+  # Explicit L2 stand_still (same as world_model intent; mjlab uses L2@-1.0).
+  cfg.rewards["stand_still"] = RewardTermCfg(
+    func=_local_rewards.stand_still,
+    weight=-1.0,
+    params={
+      "command_name": "twist",
+      "command_threshold": 0.1,
+      "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
+    },
+  )
+
+  # Train with gym-matched obs noise; play disables corruption.
+  if not play:
+    cfg.observations["actor"].enable_corruption = True
+  else:
+    cfg.observations["actor"].enable_corruption = False
     twist_cmd.ranges.lin_vel_x = (-0.5, 1.0)
     twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
@@ -400,4 +431,11 @@ def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
     },
   )
+
+  # Flat-RMA inherits Flat stand_still + standing mix; keep corruption on for train.
+  if not play:
+    cfg.observations["actor"].enable_corruption = True
+    assert cfg.rewards["stand_still"].weight == -1.0
+    assert cfg.commands["twist"].rel_standing_envs >= 0.10
+
   return cfg
