@@ -1,0 +1,10 @@
+
+<mujoco>
+  <compiler meshdir="assets"/>
+  <asset>
+    <mesh name="pelvis" file="pelvis_link.STL"/>
+  </asset>
+  <worldbody>
+    <geom type="mesh" mesh="pelvis"/>
+  </worldbody>
+</mujoco>

@@ -408,21 +408,120 @@ class variable_posture:
 
 
 def stand_still(
-        env: ManagerBasedRlEnv,
-        command_name: str,
-        command_threshold: float = 0.1,
-        asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  command_threshold: float = 0.1,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
 ) -> torch.Tensor:
+  """Penalize leaving the default pose when the twist command is near zero.
+
+  Uses L2 joint error (sum of squares) at weight -1.0 — the same formulation
+  that produced the stable stairs-uneven model_3500. Gym's L1 version at the
+  same weight is ~5–20× stronger on 29-DoF and destabilized fine-tunes.
+  Also gates on yaw command so pure turn commands are not fought by this term.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  diff_angle = (
+    asset.data.joint_pos[:, asset_cfg.joint_ids]
+    - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+  )
+  reward = torch.sum(torch.square(diff_angle), dim=1)
+  if command_name is not None:
+    command = env.command_manager.get_command(command_name)
+    if command is not None:
+      linear_norm = torch.norm(command[:, :2], dim=1)
+      angular_norm = torch.abs(command[:, 2])
+      total_command = linear_norm + angular_norm
+      reward = reward * (total_command <= command_threshold).float()
+  return reward
+
+
+class waist_foot_distance:
+  """Penalize crouch via the larger of the two waist–foot distances.
+
+  For each env, compute Euclidean distance from the waist/pelvis to the left
+  and right foot, then take ``max(d_L, d_R)``. Only the shortfall relative to
+  the standing default is punished:
+
+      cost = relu(target_distance - max(d_L, d_R))
+
+  Single-leg bend (stairs / swing) usually keeps one foot far enough that the
+  max stays near the standing value → little or no cost. Both knees bent
+  (crouch) shrinks both distances → max drops → cost > 0.
+  """
+
+  def __init__(self, cfg: RewardTermCfg, env: ManagerBasedRlEnv):
+    body_names = list(cfg.params["asset_cfg"].body_names)
+    foot_names = list(cfg.params["asset_cfg"].site_names)
+    if len(body_names) != 1:
+      raise ValueError(
+        "waist_foot_distance expects exactly one waist body "
+        f"(got {len(body_names)}: {body_names})."
+      )
+    if len(foot_names) < 2:
+      raise ValueError(
+        "waist_foot_distance expects at least two foot sites "
+        f"(got {len(foot_names)})."
+      )
+    target = cfg.params.get("target_distance")
+    if target is None:
+      # Custom-R1 HOME standing pelvis↔foot Euclidean distance.
+      target = 1.047
+    self.target_distance = float(target)
+
+  def __call__(
+    self,
+    env: ManagerBasedRlEnv,
+    asset_cfg: SceneEntityCfg,
+    target_distance: float | None = None,
+  ) -> torch.Tensor:
+    del target_distance  # Used in __init__.
     asset: Entity = env.scene[asset_cfg.name]
-    diff_angle = asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
-    reward = torch.sum(torch.square(diff_angle), dim=1)
-    if command_name is not None:
-        command = env.command_manager.get_command(command_name)
-        if command is not None:
-            linear_norm = torch.norm(command[:, :2], dim=1)
-            angular_norm = torch.abs(command[:, 2])
-            total_command = linear_norm + angular_norm
-            scale = (total_command <= command_threshold).float()
-            reward *= scale
-    return reward
+    waist_pos = asset.data.body_link_pos_w[:, asset_cfg.body_ids, :].squeeze(1)  # [B, 3]
+    foot_pos = asset.data.site_pos_w[:, asset_cfg.site_ids, :]  # [B, N, 3]
+    dist = torch.norm(foot_pos - waist_pos.unsqueeze(1), dim=-1)  # [B, N]
+    max_dist = torch.max(dist, dim=1).values  # [B]
+    # Only punish when the larger waist–foot distance is below standing default.
+    return torch.relu(self.target_distance - max_dist)
+
+
+def both_knees_bent(
+  env: ManagerBasedRlEnv,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+  bend_margin: float = 0.15,
+) -> torch.Tensor:
+  """Penalize simultaneous flexion of both knees beyond the default pose.
+
+  Single-leg bend (stairs / swing) is allowed; crouch (both knees flexed) is
+  penalized via the product of excess flexions.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  q = asset.data.joint_pos[:, asset_cfg.joint_ids]  # [B, 2] expected L/R knee
+  q0 = asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+  # Positive excess = more flexed than standing default (Custom-R1 knee +flex).
+  excess = torch.relu(q - q0 - bend_margin)  # [B, 2]
+  if excess.shape[-1] < 2:
+    return torch.zeros(env.num_envs, device=env.device)
+  return excess[:, 0] * excess[:, 1]
+
+
+def standing_yaw_rate(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  command_threshold: float = 0.1,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize base yaw rate when the twist command is near zero (standing).
+
+  Stops idle spin / constant turn-in-place when vx=vy=wz≈0. Inactive while
+  the robot is being commanded to move or turn.
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  yaw_rate = asset.data.root_link_ang_vel_b[:, 2]
+  cost = torch.square(yaw_rate)
+  command = env.command_manager.get_command(command_name)
+  if command is not None:
+    total = torch.norm(command[:, :2], dim=1) + torch.abs(command[:, 2])
+    cost = cost * (total <= command_threshold).float()
+  return cost
 

@@ -44,3 +44,10 @@ from .unitree_h2.h2_constants import (
 from .unitree_h2.h2_constants import (
   get_h2_robot_cfg as get_h2_robot_cfg,
 )
+
+from .custom_r1 import (
+  CUSTOM_R1_ACTION_SCALE as CUSTOM_R1_ACTION_SCALE,
+)
+from .custom_r1 import (
+  get_custom_r1_robot_cfg as get_custom_r1_robot_cfg,
+)

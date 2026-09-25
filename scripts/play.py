@@ -4,7 +4,7 @@ import os
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import torch
 import tyro
@@ -17,6 +17,7 @@ from mjlab.utils.os import get_wandb_checkpoint_path
 from mjlab.utils.torch import configure_torch_backends
 from mjlab.utils.wrappers import VideoRecorder
 from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
+from mjlab.viewer.native.keys import KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_UP, KEY_Z
 
 
 @dataclass(frozen=True)
@@ -34,10 +35,93 @@ class PlayConfig:
   viewer: Literal["auto", "native", "viser"] = "auto"
   no_terminations: bool = False
   """Disable all termination conditions (useful for viewing motions with dummy agents)."""
+  keyboard_control: bool = True
+  """Use arrow keys to set twist commands (native viewer)."""
+  lin_vel_step: float = 0.1
+  """Forward-speed change per Up/Down press (m/s)."""
+  ang_vel_step: float = 0.1
+  """Yaw-rate change per Left/Right press (rad/s)."""
 
   # Internal flag used by demo script.
   _demo_mode: tyro.conf.Suppress[bool] = False
 
+
+class KeyboardTwistController:
+  """Arrow-key twist commands for velocity play (native viewer).
+
+  Up/Down  : forward speed (lin_vel_x)
+  Left/Right: turning rate (ang_vel_z)
+  Z        : zero command (stand)
+  """
+
+  def __init__(
+    self,
+    env: Any,
+    *,
+    lin_step: float = 0.1,
+    ang_step: float = 0.1,
+  ):
+    self._env = env
+    self._lin_step = lin_step
+    self._ang_step = ang_step
+    self._term: Any | None = None
+    self._orig_compute: Any | None = None
+    self.vx = 0.0
+    self.vy = 0.0
+    self.wz = 0.0
+    self.enabled = False
+
+  def attach(self) -> bool:
+    command_manager = getattr(self._env.unwrapped, "command_manager", None)
+    if command_manager is None or "twist" not in command_manager.active_terms:
+      return False
+
+    term = command_manager.get_term("twist")
+    # Stop random resampling / heading / standing from fighting the keyboard.
+    term.cfg.heading_command = False
+    term.cfg.rel_standing_envs = 0.0
+    term.cfg.resampling_time_range = (1e9, 1e9)
+    term.is_heading_env[:] = False
+    term.is_standing_env[:] = False
+    term.vel_command_b.zero_()
+
+    self._term = term
+    self._orig_compute = term.compute
+
+    def compute(dt: float) -> None:
+      assert self._orig_compute is not None and self._term is not None
+      self._orig_compute(dt)
+      if not self.enabled:
+        return
+      self._term.is_heading_env[:] = False
+      self._term.is_standing_env[:] = False
+      self._term.vel_command_b[:, 0] = self.vx
+      self._term.vel_command_b[:, 1] = self.vy
+      self._term.vel_command_b[:, 2] = self.wz
+
+    term.compute = compute  # type: ignore[method-assign]
+    self.enabled = True
+    return True
+
+  def on_key(self, key: int) -> None:
+    if not self.enabled or self._term is None:
+      return
+    ranges = self._term.cfg.ranges
+    if key == KEY_UP:
+      self.vx = min(self.vx + self._lin_step, float(ranges.lin_vel_x[1]))
+    elif key == KEY_DOWN:
+      self.vx = max(self.vx - self._lin_step, float(ranges.lin_vel_x[0]))
+    elif key == KEY_LEFT:
+      self.wz = min(self.wz + self._ang_step, float(ranges.ang_vel_z[1]))
+    elif key == KEY_RIGHT:
+      self.wz = max(self.wz - self._ang_step, float(ranges.ang_vel_z[0]))
+    elif key == KEY_Z:
+      self.vx = 0.0
+      self.vy = 0.0
+      self.wz = 0.0
+    else:
+      return
+    print(f"[cmd] vx={self.vx:+.2f} m/s  wz={self.wz:+.2f} rad/s")
 
 def run_play(task_id: str, cfg: PlayConfig):
   configure_torch_backends()
@@ -114,6 +198,16 @@ def run_play(task_id: str, cfg: PlayConfig):
   if cfg.video_width is not None:
     env_cfg.viewer.width = cfg.video_width
 
+  # Prepare twist command for manual keyboard control during play.
+  if cfg.keyboard_control and "twist" in env_cfg.commands:
+    twist_cfg = env_cfg.commands["twist"]
+    twist_cfg.heading_command = False
+    twist_cfg.rel_standing_envs = 0.0
+    twist_cfg.resampling_time_range = (1e9, 1e9)
+    # Required when heading_command=False (command ctor validates this).
+    if hasattr(twist_cfg.ranges, "heading"):
+      twist_cfg.ranges.heading = None
+
   render_mode = "rgb_array" if (TRAINED_MODE and cfg.video) else None
   if cfg.video and DUMMY_MODE:
     print(
@@ -167,9 +261,31 @@ def run_play(task_id: str, cfg: PlayConfig):
   else:
     resolved_viewer = cfg.viewer
 
+  keyboard: KeyboardTwistController | None = None
+  if cfg.keyboard_control:
+    keyboard = KeyboardTwistController(
+      env, lin_step=cfg.lin_vel_step, ang_step=cfg.ang_vel_step
+    )
+    if keyboard.attach():
+      print(
+        "[INFO] Keyboard twist: Up/Down = forward speed, "
+        "Left/Right = turn rate, Z = stop"
+      )
+    else:
+      keyboard = None
+
   if resolved_viewer == "native":
-    NativeMujocoViewer(env, policy).run()
+    NativeMujocoViewer(
+      env,
+      policy,
+      key_callback=keyboard.on_key if keyboard is not None else None,
+    ).run()
   elif resolved_viewer == "viser":
+    if keyboard is not None:
+      print(
+        "[INFO] Arrow-key twist is for the native viewer; "
+        "use the Viser joystick panel instead."
+      )
     ViserPlayViewer(env, policy).run()
   else:
     raise RuntimeError(f"Unsupported viewer backend: {resolved_viewer}")
