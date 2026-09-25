@@ -158,7 +158,7 @@ class RMAOnPolicyRunner:
 
         wandb.init(
           project=train_cfg.get("wandb_project", "humanoid"),
-          name=train_cfg.get("run_name", "rma"),
+          name=train_cfg.get("run_name") or os.path.basename(self.log_dir),
           dir=self.log_dir,
           config=train_cfg,
         )
@@ -176,6 +176,15 @@ class RMAOnPolicyRunner:
   def learn(
     self, num_learning_iterations: int, init_at_random_ep_len: bool = False
   ) -> None:
+    # Params are written by train.py before learn(); upload them now that W&B is live.
+    if self.writer == "wandb" and self.log_dir is not None:
+      try:
+        from src.utils.training_backup import upload_config_artifact
+
+        upload_config_artifact(self.log_dir)
+      except Exception as exc:
+        print(f"[WARN] W&B config artifact upload failed: {exc}")
+
     if init_at_random_ep_len:
       self.env.unwrapped.episode_length_buf = torch.randint_like(
         self.env.unwrapped.episode_length_buf,
@@ -293,6 +302,22 @@ class RMAOnPolicyRunner:
     saved["iter"] = self.current_learning_iteration
     saved["infos"] = infos
     torch.save(saved, path)
+    if self.writer == "wandb" and self.log_dir is not None:
+      try:
+        from src.utils.training_backup import backup_after_checkpoint
+
+        backup_after_checkpoint(
+          self.log_dir, path, iteration=self.current_learning_iteration
+        )
+      except Exception as exc:
+        print(f"[WARN] W&B backup failed: {exc}")
+        try:
+          import wandb
+
+          wandb.save(path, base_path=self.log_dir)
+        except Exception as exc2:
+          print(f"[WARN] wandb.save fallback failed: {exc2}")
+
 
   def load(self, path: str, load_optimizer: bool = True) -> None:
     loaded = torch.load(path, map_location=self.device, weights_only=False)

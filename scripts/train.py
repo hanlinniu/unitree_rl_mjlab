@@ -118,6 +118,11 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   agent_cfg = asdict(cfg.agent)
   env_cfg = asdict(cfg.env)
 
+  # Always persist checkpoints to W&B when using the wandb logger so a dead
+  # instance can be recovered from the cloud.
+  if str(agent_cfg.get("logger", "")).lower() == "wandb":
+    agent_cfg["upload_model"] = True
+
   runner_cls = load_runner_cls(task_id)
   if runner_cls is None:
     runner_cls = MjlabOnPolicyRunner
@@ -134,6 +139,23 @@ def run_train(task_id: str, cfg: TrainConfig, log_dir: Path) -> None:
   if rank == 0:
     dump_yaml(log_dir / "params" / "env.yaml", env_cfg)
     dump_yaml(log_dir / "params" / "agent.yaml", agent_cfg)
+    from src.utils.training_backup import write_run_meta
+
+    write_run_meta(
+      log_dir,
+      task_id=task_id,
+      experiment_name=getattr(cfg.agent, "experiment_name", None),
+      run_name=getattr(cfg.agent, "run_name", None),
+      extra={
+        "resume": bool(getattr(cfg.agent, "resume", False)),
+        "load_run": getattr(cfg.agent, "load_run", None),
+        "load_checkpoint": getattr(cfg.agent, "load_checkpoint", None),
+      },
+    )
+    # Stash paths on the runner so save() can upload even before learn() inits W&B.
+    if hasattr(runner, "cfg") and isinstance(runner.cfg, dict):
+      runner.cfg["_backup_log_dir"] = str(log_dir)
+      runner.cfg["_backup_task_id"] = task_id
 
   runner.learn(
     num_learning_iterations=cfg.agent.max_iterations, init_at_random_ep_len=True

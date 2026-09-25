@@ -18,5 +18,30 @@ Plane / flat terrain training **without** height-scan (scandot), with **RMA**
 ```bash
 bash scripts/run_train_plane_no_scandot_rma.sh
 # or:
-python scripts/train.py Custom-R1-Flat-RMA --env.scene.num-envs=4096 --agent.logger=tensorboard
+python scripts/train.py Custom-R1-Flat-RMA --env.scene.num-envs=4096 --agent.logger=wandb
+```
+
+## Recover training from W&B (instance died)
+Training uploads durable **Artifacts** (configs + each `model_*.pt` + `policy.onnx`)
+whenever `--agent.logger=wandb`.
+
+```bash
+# On a new instance or your PC:
+python scripts/download_wandb_run.py \
+  --run ENTITY/PROJECT/RUN_ID \
+  --out logs/rsl_rl/custom_r1_flat_rma/restored_from_wandb
+
+# Resume (copy/rename folder to match load-run if needed):
+python scripts/train.py Custom-R1-Flat-RMA \
+  --agent.resume=True \
+  --agent.load-run=restored_from_wandb \
+  --agent.load-checkpoint=model_XXXX.pt \
+  --agent.logger=wandb
+```
+
+Pack a local run before leaving an instance:
+```bash
+python scripts/download_wandb_run.py pack \
+  --log-dir logs/rsl_rl/<experiment>/<run_dir> \
+  --out /tmp/run_backup.tar.gz
 ```
