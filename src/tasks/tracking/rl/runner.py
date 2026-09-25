@@ -110,6 +110,14 @@ class MotionTrackingOnPolicyRunner(MjlabOnPolicyRunner):
     )
     attach_metadata_to_onnx(os.path.join(policy_path, filename), metadata)
     if self.logger.logger_type in ["wandb"]:
+      try:
+        from src.utils.training_backup import backup_after_checkpoint
+
+        backup_after_checkpoint(
+          policy_path, path, iteration=self.current_learning_iteration
+        )
+      except Exception as exc:
+        print(f"[WARN] W&B backup failed: {exc}")
       wandb.save(policy_path + filename, base_path=os.path.dirname(policy_path))
       if self.registry_name is not None:
         wandb.run.use_artifact(self.registry_name)  # type: ignore
