@@ -9,6 +9,7 @@ from mjlab.envs import mdp as envs_mdp
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.reward_manager import RewardTermCfg
+from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
@@ -195,4 +196,46 @@ def unitree_h2_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
     twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
 
+  return cfg
+
+
+def unitree_h2_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Plane / no-scandot H2 Flat env with RMA priv_latent domain randomization."""
+  from src.tasks.velocity.rma import events as rma_events
+
+  cfg = unitree_h2_flat_env_cfg(play=play)
+
+  # Unified RMA randomizer replaces separate friction/COM startup terms.
+  cfg.events.pop("foot_friction", None)
+  cfg.events.pop("base_com", None)
+
+  foot_geom_names = tuple(
+    f"{side}_foot{i}_collision" for side in ("left", "right") for i in range(1, 8)
+  )
+
+  def _rma_params() -> dict:
+    return {
+      "friction_range": (0.3, 1.6),
+      "mass_scale_range": (0.8, 1.2),
+      "com_offset_range": (-0.05, 0.05),
+      "motor_strength_range": (0.8, 1.2),
+      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
+      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
+    }
+
+  cfg.events["init_rma_buffers"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.init_rma_buffers,
+    params={"history_len": 10, "num_priv_explicit": 9},
+  )
+  cfg.events["randomize_rma_priv_latent"] = EventTermCfg(
+    mode="reset",
+    func=rma_events.randomize_rma_priv_latent,
+    params=_rma_params(),
+  )
+  cfg.events["randomize_rma_priv_latent_startup"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.randomize_rma_priv_latent,
+    params=_rma_params(),
+  )
   return cfg
