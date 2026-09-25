@@ -14,3 +14,6 @@ bash scripts/run_train_rough_with_scandot.sh
 python scripts/train.py Custom-R1-Rough --env.scene.num-envs=4096
 python scripts/train.py Unitree-H2-Rough --env.scene.num-envs=4096
 ```
+
+## Recover training from W&B (instance died)
+See [docs/WANDB_RECOVERY.md](docs/WANDB_RECOVERY.md). Train with `--agent.logger=wandb` so configs + checkpoints upload as durable Artifacts.
