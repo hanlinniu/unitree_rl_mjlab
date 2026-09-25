@@ -13,3 +13,6 @@ bash scripts/run_train_plane_no_scandot.sh
 # or:
 python scripts/train.py Custom-R1-Flat --env.scene.num-envs=4096
 ```
+
+## Recover training from W&B (instance died)
+See [docs/WANDB_RECOVERY.md](docs/WANDB_RECOVERY.md). Train with `--agent.logger=wandb` so configs + checkpoints upload as durable Artifacts.
