@@ -525,9 +525,11 @@ def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   _attach_custom_r1_rma_events(cfg)
 
   # Stairs/slope heightfields need more contacts than plane; 48 overflows (~76+).
-  # Keep below play's 128 to limit EPA memory at 4096 envs.
+  # 96 OOMs EPA buffers at 4096 envs on 24GB — use 80 and lower CCD like Flat.
   if not play:
-    cfg.sim.nconmax = 96
+    cfg.sim.nconmax = 80
+    cfg.sim.mujoco.ccd_iterations = 50
+    cfg.sim.contact_sensor_maxmatch = 64
 
   # Keep height_scan / terrain_scan (scandot) for RMA actor packing.
   assert "height_scan" in cfg.observations["actor"].terms

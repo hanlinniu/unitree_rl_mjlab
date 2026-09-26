@@ -323,9 +323,11 @@ def unitree_h2_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg = unitree_h2_rough_env_cfg(play=play)
   _apply_h2_stairs_uneven_slope_terrains(cfg)
 
-  # Match R1 Rough-RMA: stairs/slope need more contacts than plane train default.
+  # Match R1 Rough-RMA contact budget (avoid EPA OOM at multi-k envs).
   if not play:
-    cfg.sim.nconmax = 96
+    cfg.sim.nconmax = 80
+    cfg.sim.mujoco.ccd_iterations = 50
+    cfg.sim.contact_sensor_maxmatch = 64
 
   cfg.events.pop("foot_friction", None)
   cfg.events.pop("base_com", None)

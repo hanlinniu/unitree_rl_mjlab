@@ -45,11 +45,11 @@ echo "=============================================="
 echo " Task:    $TASK"
 echo " Branch:  $BRANCH"
 echo " Run:     $RUN_NAME"
-echo " Envs:    4096"
+echo " Envs:    2048"
 echo "=============================================="
 
 stdbuf -oL -eL python scripts/train.py "$TASK" \
-  --env.scene.num-envs=4096 \
+  --env.scene.num-envs=2048 \
   --agent.logger=wandb \
   --agent.wandb-project=humanoid \
   --agent.run-name="$RUN_NAME" \
