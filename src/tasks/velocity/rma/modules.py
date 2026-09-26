@@ -1,9 +1,11 @@
 """RMA actor-critic and velocity estimator (ported from extreme-parkour).
 
-Observation layout (num_scan=0 for plane-no-scandot):
-  [proprio | priv_explicit | priv_latent | history]
-history encodes proprio over ``num_hist`` steps into the same latent space as
-``priv_encoder(priv_latent)``.
+Observation layout:
+  [proprio | scan(num_scan) | priv_explicit | priv_latent | history]
+
+``num_scan=0`` omits the scan slot (plane / no-scandot). With ``num_scan>0`` and
+``scan_encoder_dims`` set (extreme-parkour default ``[128, 64, 32]``), scandots
+are encoded before the actor MLP.
 """
 
 from __future__ import annotations

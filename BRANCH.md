@@ -1,47 +1,36 @@
-# Branch: `plane-no-scandot-RMA`
+# Branch: `rough-with-scandot-RMA`
 
-Plane / flat terrain training **without** height-scan (scandot), with **RMA**
-(Rapid Motor Adaptation) from [extreme-parkour](https://github.com/chengxuxin/extreme-parkour):
+Rough terrain **with height-scan (scandot)** + **RMA**, following
+[extreme-parkour](https://github.com/chengxuxin/extreme-parkour) main:
 
-- `priv_encoder` — encodes privileged latent (mass, friction, motor strength)
-- `history_encoder` — estimates the same latent from proprio history (`hist_latent`)
-- Velocity / `priv_explicit` estimator (base linear velocity, padded to 9-D)
-- PPO updates with `priv_reg` (teacher) + dagger (student history encoder)
+- Actor obs: `[proprio | scan | priv_explicit(9) | priv_latent | history]`
+- `scan_encoder_dims = [128, 64, 32]`
+- Terrains: **stairs** + **uneven** (`random_rough` / `wave`) + **slope**
+  (`hf_pyramid_slope` / inv); no flat
 
-## Observation layout (actor)
-```
-[proprio | priv_explicit(9) | priv_latent | history(history_len * proprio)]
-```
-`num_scan = 0` (no scandot). Critic keeps the standard privileged Flat obs.
+## Tasks
+- `Custom-R1-Rough-RMA`
+- `Unitree-H2-Rough-RMA`
+
+(Plane / no-scandot RMA tasks `*-Flat-RMA` still work with `num_scan=0`.)
 
 ## Train
 ```bash
-bash scripts/run_train_plane_no_scandot_rma.sh
+bash scripts/run_train_rough_with_scandot_rma.sh
 # or:
-python scripts/train.py Custom-R1-Flat-RMA --env.scene.num-envs=4096 --agent.logger=wandb
+python scripts/train.py Custom-R1-Rough-RMA --env.scene.num-envs=4096 --agent.logger=wandb
+python scripts/train.py Unitree-H2-Rough-RMA --env.scene.num-envs=4096 --agent.logger=wandb
 ```
 
-## Recover training from W&B (instance died)
-Training uploads durable **Artifacts** (configs + each `model_*.pt` + `policy.onnx`)
-whenever `--agent.logger=wandb`.
-
+## Recover from W&B
 ```bash
-# On a new instance or your PC:
 python scripts/download_wandb_run.py \
   --run ENTITY/PROJECT/RUN_ID \
-  --out logs/rsl_rl/custom_r1_flat_rma/restored_from_wandb
+  --out logs/rsl_rl/custom_r1_rough_rma/restored_from_wandb
 
-# Resume (copy/rename folder to match load-run if needed):
-python scripts/train.py Custom-R1-Flat-RMA \
+python scripts/train.py Custom-R1-Rough-RMA \
   --agent.resume=True \
   --agent.load-run=restored_from_wandb \
   --agent.load-checkpoint=model_XXXX.pt \
   --agent.logger=wandb
-```
-
-Pack a local run before leaving an instance:
-```bash
-python scripts/download_wandb_run.py pack \
-  --log-dir logs/rsl_rl/<experiment>/<run_dir> \
-  --out /tmp/run_backup.tar.gz
 ```

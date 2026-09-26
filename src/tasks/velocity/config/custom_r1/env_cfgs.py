@@ -428,54 +428,75 @@ def custom_r1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   return cfg
 
 
-def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Plane / no-scandot Flat env with RMA priv_latent domain randomization."""
-  # Import locally to avoid circular imports through src.tasks.velocity.mdp.
+def _apply_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
+  """Stairs + uneven + slope only (drop flat). Used by Rough-RMA."""
+  from mjlab.terrains.config import ROUGH_TERRAINS_CFG
+
+  if cfg.scene.terrain is None or cfg.scene.terrain.terrain_generator is None:
+    return
+  gen = cfg.scene.terrain.terrain_generator
+  # Start from upstream defaults so slopes are available even if Rough popped them.
+  sub = dict(ROUGH_TERRAINS_CFG.sub_terrains)
+  # Keep Custom-R1 stair riser tuning if present on current gen.
+  for key in ("pyramid_stairs", "pyramid_stairs_inv"):
+    if key in gen.sub_terrains:
+      sub[key] = replace(
+        gen.sub_terrains[key],
+        proportion=0.22,
+      )
+    elif key in sub:
+      sub[key] = replace(sub[key], proportion=0.22)
+  for key, prop in (
+    ("hf_pyramid_slope", 0.14),
+    ("hf_pyramid_slope_inv", 0.14),
+    ("random_rough", 0.14),
+    ("wave_terrain", 0.14),
+  ):
+    if key in sub:
+      sub[key] = replace(sub[key], proportion=prop)
+  sub.pop("flat", None)
+  cfg.scene.terrain.terrain_generator = replace(
+    gen, curriculum=True, sub_terrains=sub
+  )
+
+
+def _attach_custom_r1_rma_events(cfg: ManagerBasedRlEnvCfg) -> None:
   from src.tasks.velocity.rma import events as rma_events
 
-  cfg = custom_r1_flat_env_cfg(play=play)
-
-  # Replace separate friction/COM startup terms with the unified RMA randomizer
-  # so priv_latent matches the applied dynamics.
   cfg.events.pop("foot_friction", None)
   cfg.events.pop("base_com", None)
-
   foot_geom_names = tuple(
     f"{side}_foot{i}_collision" for side in ("left", "right") for i in range(1, 8)
   )
+  rma_params = {
+    "friction_range": (0.3, 1.6),
+    "mass_scale_range": (0.8, 1.2),
+    "com_offset_range": (-0.05, 0.05),
+    "motor_strength_range": (0.8, 1.2),
+    "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
+    "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
+  }
   cfg.events["init_rma_buffers"] = EventTermCfg(
     mode="startup",
     func=rma_events.init_rma_buffers,
-    params={
-      "history_len": 10,
-      "num_priv_explicit": 9,
-    },
+    params={"history_len": 10, "num_priv_explicit": 9},
   )
   cfg.events["randomize_rma_priv_latent"] = EventTermCfg(
     mode="reset",
     func=rma_events.randomize_rma_priv_latent,
-    params={
-      "friction_range": (0.3, 1.6),
-      "mass_scale_range": (0.8, 1.2),
-      "com_offset_range": (-0.05, 0.05),
-      "motor_strength_range": (0.8, 1.2),
-      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
-      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
-    },
+    params=dict(rma_params),
   )
-  # Also run once at startup so the first observation is valid before reset.
   cfg.events["randomize_rma_priv_latent_startup"] = EventTermCfg(
     mode="startup",
     func=rma_events.randomize_rma_priv_latent,
-    params={
-      "friction_range": (0.3, 1.6),
-      "mass_scale_range": (0.8, 1.2),
-      "com_offset_range": (-0.05, 0.05),
-      "motor_strength_range": (0.8, 1.2),
-      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
-      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_Link",)),
-    },
+    params=dict(rma_params),
   )
+
+
+def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Plane / no-scandot Flat env with RMA priv_latent domain randomization."""
+  cfg = custom_r1_flat_env_cfg(play=play)
+  _attach_custom_r1_rma_events(cfg)
 
   # Flat-RMA inherits H2-matched Flat standstill recipe; keep corruption on for train.
   if not play:
@@ -488,5 +509,26 @@ def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     assert cfg.commands["twist"].rel_heading_envs == 0.90
     assert cfg.rewards["track_angular_velocity"].weight == 2.0
     assert cfg.rewards["track_linear_velocity"].weight == 1.0
+    assert "height_scan" not in cfg.observations["actor"].terms
+
+  return cfg
+
+
+def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Rough terrain with scandot + RMA (stairs, uneven, slope)."""
+  cfg = custom_r1_rough_env_cfg(play=play)
+  _apply_stairs_uneven_slope_terrains(cfg)
+  _attach_custom_r1_rma_events(cfg)
+
+  # Keep height_scan / terrain_scan (scandot) for RMA actor packing.
+  assert "height_scan" in cfg.observations["actor"].terms
+  assert any(s.name == "terrain_scan" for s in (cfg.scene.sensors or ()))
+  if not play:
+    assert "terrain_levels" in cfg.curriculum
+    keys = set(cfg.scene.terrain.terrain_generator.sub_terrains.keys())
+    assert "flat" not in keys
+    assert {"pyramid_stairs", "pyramid_stairs_inv"} <= keys
+    assert {"hf_pyramid_slope", "hf_pyramid_slope_inv"} <= keys
+    assert {"random_rough", "wave_terrain"} <= keys
 
   return cfg

@@ -102,3 +102,16 @@ def unitree_h2_rma_ppo_runner_cfg(
     logger=base.logger,
     wandb_project=base.wandb_project,
   )
+
+
+def unitree_h2_rough_rma_ppo_runner_cfg(
+  experiment_name: str = "h2_rough_rma",
+  num_scan: int = 187,
+) -> RslRlH2RmaOnPolicyRunnerCfg:
+  """RMA + scandot runner for Unitree-H2-Rough-RMA."""
+  cfg = unitree_h2_rma_ppo_runner_cfg(experiment_name=experiment_name)
+  cfg.rma = dict(cfg.rma)
+  cfg.rma["num_scan"] = int(num_scan)
+  cfg.rma_policy = dict(cfg.rma_policy)
+  cfg.rma_policy["scan_encoder_dims"] = [128, 64, 32]
+  return cfg

@@ -1,7 +1,13 @@
-"""Wrap flat proprio actor obs into RMA layout (no scandot).
+"""Wrap actor obs into extreme-parkour RMA layout.
 
 Packed actor observation:
-  [proprio | priv_explicit(9) | priv_latent | history(history_len * proprio)]
+  [proprio | scan(num_scan) | priv_explicit(9) | priv_latent | history(history_len * proprio)]
+
+When ``num_scan=0`` (plane / no scandot), ``height_scan`` must not be in the actor
+group and the scan slot is omitted (same as plane-no-scandot-RMA).
+
+When ``num_scan>0``, the actor group must end with ``height_scan`` of that size
+(as in ``*-Rough`` tasks); it is sliced off proprio and placed in the scan slot.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from mjlab.rl import RslRlVecEnvWrapper
 
 
 class RMAObsWrapper:
-  """Adds priv_explicit, priv_latent, and proprio history around a VecEnv."""
+  """Adds priv_explicit, priv_latent, optional scandot, and proprio history."""
 
   def __init__(
     self,
@@ -24,22 +30,30 @@ class RMAObsWrapper:
     num_priv_explicit: int = 9,
     num_scan: int = 0,
   ):
-    assert num_scan == 0, "plane-no-scandot-RMA does not use scandot"
     self.env = env
     self.history_len = history_len
     self.num_priv_explicit = num_priv_explicit
-    self.num_scan = num_scan
+    self.num_scan = int(num_scan)
     self.device = env.device
     self.num_envs = env.num_envs
     self.max_episode_length = env.max_episode_length
     self.num_actions = env.num_actions
     self.cfg = env.cfg
 
-    # Probe proprio / critic dims from the unwrapped flat task.
     raw = env.get_observations()
     assert "actor" in raw and "critic" in raw
-    self.num_prop = int(raw["actor"].shape[-1])
+    actor_dim = int(raw["actor"].shape[-1])
     self.num_critic = int(raw["critic"].shape[-1])
+
+    if self.num_scan > 0:
+      if actor_dim <= self.num_scan:
+        raise ValueError(
+          f"actor obs dim {actor_dim} <= num_scan {self.num_scan}; "
+          "height_scan must be concatenated after proprio terms."
+        )
+      self.num_prop = actor_dim - self.num_scan
+    else:
+      self.num_prop = actor_dim
 
     unwrapped = env.unwrapped
     if not hasattr(unwrapped, "rma_priv_latent"):
@@ -48,7 +62,6 @@ class RMAObsWrapper:
         "events are registered on the env."
       )
     self.num_priv_latent = int(unwrapped.rma_priv_latent.shape[-1])
-    # History buffer may have been allocated with a placeholder num_prop; resize.
     hist = getattr(unwrapped, "obs_history_buf", None)
     if hist is None or hist.shape[-1] != self.num_prop:
       unwrapped.obs_history_buf = torch.zeros(
@@ -60,6 +73,7 @@ class RMAObsWrapper:
       )
     unwrapped.rma_num_prop = self.num_prop
     unwrapped.rma_history_len = self.history_len
+    unwrapped.rma_num_scan = self.num_scan
 
     self.num_obs = (
       self.num_prop
@@ -88,8 +102,15 @@ class RMAObsWrapper:
   def __getattr__(self, name: str) -> Any:
     return getattr(self.env, name)
 
+  def _split_actor(self, actor: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    if self.num_scan > 0:
+      proprio = actor[:, : self.num_prop]
+      scan = actor[:, self.num_prop : self.num_prop + self.num_scan]
+      return proprio, scan
+    return actor, actor.new_zeros(actor.shape[0], 0)
+
   def _pack(self, raw: TensorDict) -> TensorDict:
-    proprio = raw["actor"]
+    proprio, scan = self._split_actor(raw["actor"])
     critic = raw["critic"]
     unwrapped = self.unwrapped
 
@@ -101,7 +122,11 @@ class RMAObsWrapper:
     priv_latent = unwrapped.rma_priv_latent
     history = unwrapped.obs_history_buf.reshape(self.num_envs, -1)
 
-    actor = torch.cat([proprio, priv_explicit, priv_latent, history], dim=-1)
+    parts = [proprio]
+    if self.num_scan > 0:
+      parts.append(scan)
+    parts.extend([priv_explicit, priv_latent, history])
+    actor = torch.cat(parts, dim=-1)
     assert actor.shape[-1] == self.num_obs
 
     # Update history AFTER packing (matches extreme-parkour compute_observations).
@@ -120,7 +145,6 @@ class RMAObsWrapper:
 
   def _base_lin_vel(self) -> torch.Tensor:
     """Read base linear velocity in the body / IMU frame used by critic."""
-    # Prefer the same sensor the critic uses.
     try:
       from mjlab.envs import mdp as envs_mdp
 

@@ -23,7 +23,11 @@ def _cfg_get(cfg: Mapping[str, Any] | Any, key: str, default=None):
 
 
 class RMAOnPolicyRunner:
-  """Train ActorCriticRMA with priv_reg + dagger + velocity estimator (no scandot)."""
+  """Train ActorCriticRMA with priv_reg + dagger + velocity estimator.
+
+  Supports plane (``num_scan=0``) and rough-with-scandot (``num_scan>0`` + scan
+  encoder dims from extreme-parkour).
+  """
 
   def __init__(
     self,
@@ -43,7 +47,6 @@ class RMAOnPolicyRunner:
     history_len = int(rma_cfg.get("history_len", 10))
     num_priv_explicit = int(rma_cfg.get("num_priv_explicit", 9))
     num_scan = int(rma_cfg.get("num_scan", 0))
-    assert num_scan == 0
 
     self.env = RMAObsWrapper(
       env,
@@ -59,6 +62,15 @@ class RMAOnPolicyRunner:
     num_obs = self.env.num_obs
 
     policy_cfg = train_cfg.get("rma_policy", {})
+    scan_encoder_dims = policy_cfg.get("scan_encoder_dims", None)
+    if num_scan > 0 and not scan_encoder_dims:
+      # extreme-parkour default when scandot is enabled
+      scan_encoder_dims = [128, 64, 32]
+    if num_scan == 0:
+      scan_encoder_dims = None
+    else:
+      scan_encoder_dims = list(scan_encoder_dims)
+
     actor_critic = ActorCriticRMA(
       num_prop=num_prop,
       num_scan=num_scan,
@@ -67,7 +79,7 @@ class RMAOnPolicyRunner:
       num_priv_explicit=num_priv_explicit,
       num_hist=history_len,
       num_actions=num_actions,
-      scan_encoder_dims=None,
+      scan_encoder_dims=scan_encoder_dims,
       actor_hidden_dims=list(
         policy_cfg.get("actor_hidden_dims", [512, 256, 128])
       ),
@@ -260,6 +272,33 @@ class RMAOnPolicyRunner:
         os.path.join(self.log_dir, f"model_{self.current_learning_iteration}.pt")
       )
 
+  @staticmethod
+  def _mean_ep_info_metrics(ep_infos: list) -> dict[str, float]:
+    """Average extras['log'] / extras['episode'] keys like stock rsl_rl Logger."""
+    if not ep_infos:
+      return {}
+    keys = set()
+    for info in ep_infos:
+      keys.update(info.keys())
+    metrics: dict[str, float] = {}
+    for key in keys:
+      vals: list[torch.Tensor] = []
+      for ep_info in ep_infos:
+        if key not in ep_info:
+          continue
+        val = ep_info[key]
+        if not isinstance(val, torch.Tensor):
+          val = torch.as_tensor(val)
+        if val.ndim == 0:
+          val = val.unsqueeze(0)
+        vals.append(val.detach().float().reshape(-1).cpu())
+      if not vals:
+        continue
+      mean = torch.cat(vals).mean().item()
+      # Keys from mjlab already use "Episode_Reward/..." etc.; otherwise prefix.
+      metrics[key if "/" in key else f"Episode/{key}"] = mean
+    return metrics
+
   def _log(
     self,
     it: int,
@@ -277,6 +316,7 @@ class RMAOnPolicyRunner:
       "iter_time": iter_time,
       "total_timesteps": self.tot_timesteps,
     }
+    ep_metrics = self._mean_ep_info_metrics(ep_infos)
     print(
       f"it={it} reward={locs['mean_reward']:.3f} "
       f"ep_len={locs['mean_ep_len']:.1f} "
@@ -288,12 +328,15 @@ class RMAOnPolicyRunner:
       payload = {f"Loss/{k}": v for k, v in loss_dict.items()}
       payload["Train/mean_reward"] = locs["mean_reward"]
       payload["Train/mean_episode_length"] = locs["mean_ep_len"]
+      payload.update(ep_metrics)
       wandb.log(payload, step=it)
     elif self.writer is not None:
       for k, v in loss_dict.items():
         self.writer.add_scalar(f"Loss/{k}", v, it)
       self.writer.add_scalar("Train/mean_reward", locs["mean_reward"], it)
       self.writer.add_scalar("Train/mean_episode_length", locs["mean_ep_len"], it)
+      for k, v in ep_metrics.items():
+        self.writer.add_scalar(k, v, it)
       std = self.alg.actor_critic.std.detach().mean().item()
       self.writer.add_scalar("Policy/mean_std", std, it)
 

@@ -1,6 +1,7 @@
 """Unitree H2 velocity environment configurations."""
 
 import math
+from dataclasses import replace
 
 from src.assets.robots import (
   H2_ACTION_SCALE,
@@ -15,6 +16,7 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg, RayCastSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.mdp import UniformVelocityCommandCfg
+from mjlab.terrains.config import ROUGH_TERRAINS_CFG
 from src.tasks.velocity import mdp as local_mdp
 from src.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
 
@@ -286,4 +288,73 @@ def unitree_h2_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     func=rma_events.randomize_rma_priv_latent,
     params=_rma_params(),
   )
+  return cfg
+
+
+def _apply_h2_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
+  if cfg.scene.terrain is None or cfg.scene.terrain.terrain_generator is None:
+    return
+  gen = cfg.scene.terrain.terrain_generator
+  sub = dict(ROUGH_TERRAINS_CFG.sub_terrains)
+  for key, prop in (
+    ("pyramid_stairs", 0.22),
+    ("pyramid_stairs_inv", 0.22),
+    ("hf_pyramid_slope", 0.14),
+    ("hf_pyramid_slope_inv", 0.14),
+    ("random_rough", 0.14),
+    ("wave_terrain", 0.14),
+  ):
+    if key in sub:
+      sub[key] = replace(sub[key], proportion=prop)
+  sub.pop("flat", None)
+  cfg.scene.terrain.terrain_generator = replace(
+    gen, curriculum=True, sub_terrains=sub
+  )
+
+
+def unitree_h2_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
+  """Rough H2 with scandot + RMA (stairs, uneven, slope)."""
+  from src.tasks.velocity.rma import events as rma_events
+
+  cfg = unitree_h2_rough_env_cfg(play=play)
+  _apply_h2_stairs_uneven_slope_terrains(cfg)
+
+  cfg.events.pop("foot_friction", None)
+  cfg.events.pop("base_com", None)
+  foot_geom_names = tuple(
+    f"{side}_foot{i}_collision" for side in ("left", "right") for i in range(1, 8)
+  )
+
+  def _rma_params() -> dict:
+    return {
+      "friction_range": (0.3, 1.6),
+      "mass_scale_range": (0.8, 1.2),
+      "com_offset_range": (-0.05, 0.05),
+      "motor_strength_range": (0.8, 1.2),
+      "foot_asset_cfg": SceneEntityCfg("robot", geom_names=foot_geom_names),
+      "torso_asset_cfg": SceneEntityCfg("robot", body_names=("torso_link",)),
+    }
+
+  cfg.events["init_rma_buffers"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.init_rma_buffers,
+    params={"history_len": 10, "num_priv_explicit": 9},
+  )
+  cfg.events["randomize_rma_priv_latent"] = EventTermCfg(
+    mode="reset",
+    func=rma_events.randomize_rma_priv_latent,
+    params=_rma_params(),
+  )
+  cfg.events["randomize_rma_priv_latent_startup"] = EventTermCfg(
+    mode="startup",
+    func=rma_events.randomize_rma_priv_latent,
+    params=_rma_params(),
+  )
+
+  assert "height_scan" in cfg.observations["actor"].terms
+  assert any(s.name == "terrain_scan" for s in (cfg.scene.sensors or ()))
+  if not play:
+    keys = set(cfg.scene.terrain.terrain_generator.sub_terrains.keys())
+    assert "flat" not in keys
+    assert {"pyramid_stairs", "hf_pyramid_slope", "random_rough"} <= keys
   return cfg
