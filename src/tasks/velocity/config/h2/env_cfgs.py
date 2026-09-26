@@ -325,7 +325,7 @@ def unitree_h2_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # Match R1 Rough-RMA contact budget (avoid EPA OOM at multi-k envs).
   if not play:
-    cfg.sim.nconmax = 80
+    cfg.sim.nconmax = 90
     cfg.sim.mujoco.ccd_iterations = 50
     cfg.sim.contact_sensor_maxmatch = 64
 

@@ -524,10 +524,10 @@ def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   _apply_stairs_uneven_slope_terrains(cfg)
   _attach_custom_r1_rma_events(cfg)
 
-  # Stairs/slope heightfields need more contacts than plane; 48 overflows (~76+).
-  # 96 OOMs EPA buffers at 4096 envs on 24GB — use 80 and lower CCD like Flat.
+  # Stairs/slope heightfields need more contacts than plane; 48 overflows (~76–82).
+  # 96@4096 OOMs EPA on 24GB — use 90 with 2048 envs + Flat-like CCD.
   if not play:
-    cfg.sim.nconmax = 80
+    cfg.sim.nconmax = 90
     cfg.sim.mujoco.ccd_iterations = 50
     cfg.sim.contact_sensor_maxmatch = 64
 
