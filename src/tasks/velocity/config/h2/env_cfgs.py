@@ -304,7 +304,11 @@ def _apply_h2_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
     ("random_rough", 0.14),
     ("wave_terrain", 0.14),
   ):
-    if key in sub:
+    if key not in sub:
+      continue
+    if key.startswith("hf_pyramid_slope"):
+      sub[key] = replace(sub[key], proportion=prop, slope_range=(0.0, 0.4))
+    else:
       sub[key] = replace(sub[key], proportion=prop)
   sub.pop("flat", None)
   cfg.scene.terrain.terrain_generator = replace(
