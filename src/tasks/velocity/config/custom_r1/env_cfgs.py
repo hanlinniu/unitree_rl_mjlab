@@ -431,21 +431,25 @@ def custom_r1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 def _apply_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
   """Stairs + uneven + slope only (drop flat). Used by Rough-RMA."""
   from mjlab.terrains.config import ROUGH_TERRAINS_CFG
+  from src.tasks.velocity.config.rough_rma_recipe import (
+    ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+  )
 
   if cfg.scene.terrain is None or cfg.scene.terrain.terrain_generator is None:
     return
   gen = cfg.scene.terrain.terrain_generator
   # Start from upstream defaults so slopes are available even if Rough popped them.
   sub = dict(ROUGH_TERRAINS_CFG.sub_terrains)
-  # Keep Custom-R1 stair riser tuning if present on current gen.
   for key in ("pyramid_stairs", "pyramid_stairs_inv"):
-    if key in gen.sub_terrains:
-      sub[key] = replace(
-        gen.sub_terrains[key],
-        proportion=0.22,
-      )
-    elif key in sub:
-      sub[key] = replace(sub[key], proportion=0.22)
+    base = gen.sub_terrains.get(key, sub.get(key))
+    if base is None:
+      continue
+    sub[key] = replace(
+      base,
+      proportion=0.22,
+      step_height_range=ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+      step_width=getattr(base, "step_width", 0.35),
+    )
   for key, prop in (
     ("hf_pyramid_slope", 0.14),
     ("hf_pyramid_slope_inv", 0.14),
@@ -520,9 +524,16 @@ def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Rough terrain with scandot + RMA (stairs, uneven, slope)."""
+  from src.tasks.velocity.config.rough_rma_recipe import (
+    ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+    apply_matched_rough_rma_recipe,
+    assert_matched_rough_rma_recipe,
+  )
+
   cfg = custom_r1_rough_env_cfg(play=play)
   _apply_stairs_uneven_slope_terrains(cfg)
   _attach_custom_r1_rma_events(cfg)
+  apply_matched_rough_rma_recipe(cfg, play=play)
 
   # Stairs/slope heightfields need more contacts than plane; 48 overflows (~76–82).
   # 96@4096 OOMs EPA on 24GB — use 90 with 2048 envs + Flat-like CCD.
@@ -541,5 +552,11 @@ def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     assert {"pyramid_stairs", "pyramid_stairs_inv"} <= keys
     assert {"hf_pyramid_slope", "hf_pyramid_slope_inv"} <= keys
     assert {"random_rough", "wave_terrain"} <= keys
+    assert_matched_rough_rma_recipe(cfg)
+    for name in ("pyramid_stairs", "pyramid_stairs_inv"):
+      assert (
+        cfg.scene.terrain.terrain_generator.sub_terrains[name].step_height_range
+        == ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE
+      )
 
   return cfg

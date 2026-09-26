@@ -8,6 +8,8 @@ Rough terrain **with height-scan (scandot)** + **RMA**, following
 - Terrains: **stairs** + **uneven** (`random_rough` / `wave`) + **slope**
   (`hf_pyramid_slope` / inv); no flat
 
+Matched Rough-RMA recipe (R1 & H2): heading_command=True with rel_heading_envs=0.90 (10% direct wz), vx/vy/wz=(-1,2)/(-1,1)/(-1,1), 5% stand, track lin/ang=3.0, fall=-200, upright package, foot_clearance=-1, stairs max riser 0.18 m, action scale 0.25.
+
 ## Tasks
 - `Custom-R1-Rough-RMA`
 - `Unitree-H2-Rough-RMA`

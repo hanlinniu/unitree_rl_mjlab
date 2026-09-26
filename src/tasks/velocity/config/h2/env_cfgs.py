@@ -292,6 +292,10 @@ def unitree_h2_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
 
 def _apply_h2_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
+  from src.tasks.velocity.config.rough_rma_recipe import (
+    ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+  )
+
   if cfg.scene.terrain is None or cfg.scene.terrain.terrain_generator is None:
     return
   gen = cfg.scene.terrain.terrain_generator
@@ -308,6 +312,12 @@ def _apply_h2_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
       continue
     if key.startswith("hf_pyramid_slope"):
       sub[key] = replace(sub[key], proportion=prop, slope_range=(0.0, 0.4))
+    elif key.startswith("pyramid_stairs"):
+      sub[key] = replace(
+        sub[key],
+        proportion=prop,
+        step_height_range=ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+      )
     else:
       sub[key] = replace(sub[key], proportion=prop)
   sub.pop("flat", None)
@@ -319,9 +329,15 @@ def _apply_h2_stairs_uneven_slope_terrains(cfg: ManagerBasedRlEnvCfg) -> None:
 def unitree_h2_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   """Rough H2 with scandot + RMA (stairs, uneven, slope)."""
   from src.tasks.velocity.rma import events as rma_events
+  from src.tasks.velocity.config.rough_rma_recipe import (
+    ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE,
+    apply_matched_rough_rma_recipe,
+    assert_matched_rough_rma_recipe,
+  )
 
   cfg = unitree_h2_rough_env_cfg(play=play)
   _apply_h2_stairs_uneven_slope_terrains(cfg)
+  apply_matched_rough_rma_recipe(cfg, play=play)
 
   # Match R1 Rough-RMA contact budget (avoid EPA OOM at multi-k envs).
   if not play:
@@ -367,4 +383,10 @@ def unitree_h2_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     keys = set(cfg.scene.terrain.terrain_generator.sub_terrains.keys())
     assert "flat" not in keys
     assert {"pyramid_stairs", "hf_pyramid_slope", "random_rough"} <= keys
+    assert_matched_rough_rma_recipe(cfg)
+    for name in ("pyramid_stairs", "pyramid_stairs_inv"):
+      assert (
+        cfg.scene.terrain.terrain_generator.sub_terrains[name].step_height_range
+        == ROUGH_RMA_STAIR_STEP_HEIGHT_RANGE
+      )
   return cfg
