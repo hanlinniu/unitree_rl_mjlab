@@ -342,25 +342,70 @@ def custom_r1_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   del cfg.observations["critic"].terms["height_scan"]
   cfg.curriculum.pop("terrain_levels", None)
 
-  # Flat: practice zero-command standing more (Rough keeps 0.02 for stairs).
-  # Also allow slight reverse so the policy is not forward-biased when cmd=0.
+  # Undo Rough stair reward hacks — Flat matches H2 Flat / base velocity defaults.
+  cfg.rewards.pop("waist_foot_distance", None)  # H2 Flat has no crouch term
+  # Match Unitree-H2-Flat-RMA action scale (H2 Flat uses base scalar 0.25).
+  joint_pos_action = cfg.actions["joint_pos"]
+  assert isinstance(joint_pos_action, JointPositionActionCfg)
+  joint_pos_action.scale = 0.25
+  cfg.rewards["foot_clearance"].weight = -1.0
+  cfg.rewards["track_linear_velocity"].weight = 1.0
+  cfg.rewards["track_linear_velocity"].params["std"] = math.sqrt(0.25)
+  # Stronger yaw hold so forward (vx>0, wz_cmd≈0) stays straight (play uses wz).
+  cfg.rewards["track_angular_velocity"].weight = 2.0
+  cfg.rewards["track_angular_velocity"].params["std"] = math.sqrt(0.25)
+  cfg.rewards["foot_gait"].weight = 0.5
+  cfg.rewards["is_terminated"].weight = -200.0
+  cfg.rewards["body_orientation_l2"].weight = -1.0
+  cfg.rewards["body_ang_vel"].weight = -0.05
+  cfg.rewards["angular_momentum"].weight = -0.025
+  # Restore non-stair pose walking/running stds (Rough loosens hip/knee for steps).
+  cfg.rewards["pose"].params["std_walking"].update(
+    {
+      r".*hip_pitch.*": 0.5,
+      r".*knee.*": 0.5,
+      r".*ankle_pitch.*": 0.15,
+    }
+  )
+  cfg.rewards["pose"].params["std_running"].update(
+    {
+      r".*hip_pitch.*": 0.5,
+      r".*knee.*": 0.5,
+      r".*ankle_pitch.*": 0.25,
+    }
+  )
+
+  # Mixed heading: 90% envs use heading servo, 10% keep sampled ang_vel_z
+  # (direct wz, including wz≈0 while walking) so play/joystick straight walking
+  # is practiced without dropping heading training entirely.
   twist_cmd = cfg.commands["twist"]
   assert isinstance(twist_cmd, UniformVelocityCommandCfg)
-  twist_cmd.rel_standing_envs = 0.10
-  twist_cmd.ranges.lin_vel_x = (-0.5, 1.5)
-  twist_cmd.ranges.lin_vel_y = (-0.5, 0.5)
-  twist_cmd.ranges.ang_vel_z = (-0.8, 0.8)
+  twist_cmd.heading_command = True
+  twist_cmd.ranges.heading = (-math.pi, math.pi)
+  twist_cmd.rel_heading_envs = 0.90  # → 10% direct-wz envs
+  twist_cmd.ranges.lin_vel_x = (-1.0, 2.0)
+  twist_cmd.ranges.lin_vel_y = (-1.0, 1.0)
+  # Narrow yaw for the direct-wz minority (and heading-servo clip bounds).
+  twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
+  if not play:
+    twist_cmd.rel_standing_envs = 0.10
   if "command_vel" in cfg.curriculum:
     cfg.curriculum["command_vel"].params["velocity_stages"] = [
       {
         "step": 0,
-        "lin_vel_x": (-0.5, 1.5),
+        "lin_vel_x": (-0.5, 1.0),
         "lin_vel_y": (-0.5, 0.5),
-        "ang_vel_z": (-0.8, 0.8),
+        "ang_vel_z": (-0.3, 0.3),
+      },
+      {
+        "step": 5000 * 24,
+        "lin_vel_x": (-1.0, 2.0),
+        "lin_vel_y": (-1.0, 1.0),
+        "ang_vel_z": (-0.5, 0.5),
       },
     ]
 
-  # Explicit L2 stand_still (same as world_model intent; mjlab uses L2@-1.0).
+  # Explicit L2 stand_still (H2 Flat / world_model intent; mjlab L2@-1.0).
   cfg.rewards["stand_still"] = RewardTermCfg(
     func=_local_rewards.stand_still,
     weight=-1.0,
@@ -432,10 +477,16 @@ def custom_r1_flat_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     },
   )
 
-  # Flat-RMA inherits Flat stand_still + standing mix; keep corruption on for train.
+  # Flat-RMA inherits H2-matched Flat standstill recipe; keep corruption on for train.
   if not play:
     cfg.observations["actor"].enable_corruption = True
+    assert "waist_foot_distance" not in cfg.rewards
+    assert cfg.actions["joint_pos"].scale == 0.25
     assert cfg.rewards["stand_still"].weight == -1.0
     assert cfg.commands["twist"].rel_standing_envs >= 0.10
+    assert cfg.commands["twist"].heading_command is True
+    assert cfg.commands["twist"].rel_heading_envs == 0.90
+    assert cfg.rewards["track_angular_velocity"].weight == 2.0
+    assert cfg.rewards["track_linear_velocity"].weight == 1.0
 
   return cfg

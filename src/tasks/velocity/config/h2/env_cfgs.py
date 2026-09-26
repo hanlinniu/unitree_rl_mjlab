@@ -1,5 +1,7 @@
 """Unitree H2 velocity environment configurations."""
 
+import math
+
 from src.assets.robots import (
   H2_ACTION_SCALE,
   get_h2_robot_cfg,
@@ -190,11 +192,37 @@ def unitree_h2_flat_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   # Disable terrain curriculum (not present in play mode since rough clears all).
   cfg.curriculum.pop("terrain_levels", None)
 
-  # More zero-command standing so stand_still L2 is practiced (fixes forward creep).
+  # Mixed heading: 90% heading servo, 10% direct sampled ang_vel_z (incl. wz≈0
+  # while walking) so play/joystick straight walking is practiced. Strengthen
+  # yaw tracking for the direct-wz minority without dropping heading training.
   twist_cmd = cfg.commands["twist"]
   assert isinstance(twist_cmd, UniformVelocityCommandCfg)
+  twist_cmd.heading_command = True
+  twist_cmd.ranges.heading = (-math.pi, math.pi)
+  twist_cmd.rel_heading_envs = 0.90  # → 10% direct-wz envs
+  twist_cmd.ranges.lin_vel_x = (-1.0, 2.0)
+  twist_cmd.ranges.lin_vel_y = (-1.0, 1.0)
+  twist_cmd.ranges.ang_vel_z = (-0.5, 0.5)
   if not play:
     twist_cmd.rel_standing_envs = 0.10
+  if "command_vel" in cfg.curriculum:
+    cfg.curriculum["command_vel"].params["velocity_stages"] = [
+      {
+        "step": 0,
+        "lin_vel_x": (-0.5, 1.0),
+        "lin_vel_y": (-0.5, 0.5),
+        "ang_vel_z": (-0.3, 0.3),
+      },
+      {
+        "step": 5000 * 24,
+        "lin_vel_x": (-1.0, 2.0),
+        "lin_vel_y": (-1.0, 1.0),
+        "ang_vel_z": (-0.5, 0.5),
+      },
+    ]
+
+  cfg.rewards["track_angular_velocity"].weight = 2.0
+  cfg.rewards["track_angular_velocity"].params["std"] = math.sqrt(0.25)
 
   # Explicit L2 stand_still (world_model gym uses L1@-0.5; mjlab L2@-1.0).
   cfg.rewards["stand_still"] = RewardTermCfg(
