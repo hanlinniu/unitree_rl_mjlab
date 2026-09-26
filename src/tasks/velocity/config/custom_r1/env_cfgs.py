@@ -524,6 +524,11 @@ def custom_r1_rough_rma_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   _apply_stairs_uneven_slope_terrains(cfg)
   _attach_custom_r1_rma_events(cfg)
 
+  # Stairs/slope heightfields need more contacts than plane; 48 overflows (~76+).
+  # Keep below play's 128 to limit EPA memory at 4096 envs.
+  if not play:
+    cfg.sim.nconmax = 96
+
   # Keep height_scan / terrain_scan (scandot) for RMA actor packing.
   assert "height_scan" in cfg.observations["actor"].terms
   assert any(s.name == "terrain_scan" for s in (cfg.scene.sensors or ()))
